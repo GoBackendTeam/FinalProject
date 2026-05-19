@@ -80,31 +80,58 @@ type runSpec struct {
 	Cmd         []string
 	Binds       []string // host:container[:ro]
 	NetworkMode string   // build network 名稱,或 "none"
+	WorkingDir  string   // 預設 "/"
 	Timeout     time.Duration
-	MemoryBytes int64
-	NanoCPUs    int64
+
+	// 資源與能力加固(對抗惡意提交)
+	MemoryBytes     int64
+	NanoCPUs        int64
+	PidsLimit       int64             // > 0 才套用,擋 fork bomb
+	ReadonlyRootfs  bool              // 唯讀根檔系統
+	DropAllCaps     bool              // CapDrop: ALL
+	NoNewPrivileges bool              // no-new-privileges
+	Tmpfs           map[string]string // 唯讀 rootfs 下提供可寫暫存
 }
 
 // run 建立容器、啟動、等待結束(含逾時主動終止),回傳結束碼與旗標。
 func (d *dockerRunner) run(ctx context.Context, spec runSpec) (runResult, error) {
 	var res runResult
 
+	workDir := spec.WorkingDir
+	if workDir == "" {
+		workDir = "/"
+	}
 	cfg := &container.Config{
 		Image:        spec.Image,
 		Cmd:          spec.Cmd,
-		WorkingDir:   "/",
+		WorkingDir:   workDir,
 		Tty:          false,
 		AttachStdout: false,
 		AttachStderr: false,
 	}
+	resCfg := container.Resources{
+		Memory:   spec.MemoryBytes,
+		NanoCPUs: spec.NanoCPUs,
+	}
+	if spec.PidsLimit > 0 {
+		pl := spec.PidsLimit
+		resCfg.PidsLimit = &pl
+	}
 	host := &container.HostConfig{
-		Binds:       spec.Binds,
-		NetworkMode: container.NetworkMode(spec.NetworkMode),
-		AutoRemove:  false,
-		Resources: container.Resources{
-			Memory:   spec.MemoryBytes,
-			NanoCPUs: spec.NanoCPUs,
-		},
+		Binds:          spec.Binds,
+		NetworkMode:    container.NetworkMode(spec.NetworkMode),
+		AutoRemove:     false,
+		ReadonlyRootfs: spec.ReadonlyRootfs,
+		Resources:      resCfg,
+	}
+	if spec.DropAllCaps {
+		host.CapDrop = []string{"ALL"}
+	}
+	if spec.NoNewPrivileges {
+		host.SecurityOpt = append(host.SecurityOpt, "no-new-privileges:true")
+	}
+	if len(spec.Tmpfs) > 0 {
+		host.Tmpfs = spec.Tmpfs
 	}
 
 	created, err := d.cli.ContainerCreate(ctx, cfg, host, nil, d.platform, "")

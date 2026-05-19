@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 // 立即回傳 operatorId(202),評測在背景進行(對應 PRD 非同步要求)。
 func (h *Handler) CreateSubmission(c *gin.Context) {
 	cl := middleware.Current(c)
+	// 在解析 multipart 前限制 request body 大小。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxUploadBytes)
 	problemID := c.PostForm("problem_id")
 	if problemID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "problem_id is required"})
@@ -30,6 +33,11 @@ func (h *Handler) CreateSubmission(c *gin.Context) {
 	fh, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required (zip/tar/tgz)"})
+		return
+	}
+	if fh.Size > MaxUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge,
+			gin.H{"error": fmt.Sprintf("upload exceeds %d bytes", MaxUploadBytes)})
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(fh.Filename))

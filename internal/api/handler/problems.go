@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -65,30 +66,61 @@ func (h *Handler) PutProblem(c *gin.Context) {
 	}
 
 	if fh, ferr := c.FormFile("archive"); ferr == nil {
-		dst := filepath.Join(h.Cfg.ProblemsRoot, id)
-		_ = os.RemoveAll(dst)
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "mkdir problem dir"})
+		if fh.Size > MaxUploadBytes {
+			c.JSON(http.StatusRequestEntityTooLarge,
+				gin.H{"error": fmt.Sprintf("archive exceeds %d bytes", MaxUploadBytes)})
 			return
 		}
-		tmp := filepath.Join(h.Cfg.ProblemsRoot, "."+id+filepath.Ext(fh.Filename))
+		dst := filepath.Join(h.Cfg.ProblemsRoot, id)
+		nonce := time.Now().UnixNano()
+		tmp := filepath.Join(h.Cfg.ProblemsRoot, fmt.Sprintf(".upload-%s-%d%s", id, nonce, filepath.Ext(fh.Filename)))
+		staging := filepath.Join(h.Cfg.ProblemsRoot, fmt.Sprintf(".staging-%s-%d", id, nonce))
+		// 不論成功與否都清掉暫存;dst 只有在驗證通過後才會被動到。
+		defer os.Remove(tmp)
+		defer os.RemoveAll(staging)
+
+		if err := os.MkdirAll(staging, 0o755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "mkdir staging"})
+			return
+		}
 		if err := c.SaveUploadedFile(fh, tmp); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "save archive"})
 			return
 		}
-		defer os.Remove(tmp)
-		if err := archive.Extract(tmp, dst); err != nil {
+		// 先解壓到 staging 並驗證,壞包不會影響既有題目。
+		if err := archive.Extract(tmp, staging); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "extract archive: " + err.Error()})
 			return
 		}
-		if !archive.HasCMakeLists(dst) {
+		if !archive.HasCMakeLists(staging) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "題目壓縮檔根目錄缺少 CMakeLists.txt"})
 			return
 		}
+		cases := discoverSpecCases(staging)
+		if len(cases) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "題目缺少 spec/ 測資(無 case)"})
+			return
+		}
+
+		// 驗證通過 → 原子替換:舊題先移到 backup,失敗可回滾。
+		backup := filepath.Join(h.Cfg.ProblemsRoot, fmt.Sprintf(".bak-%s-%d", id, nonce))
+		if _, statErr := os.Stat(dst); statErr == nil {
+			if err := os.Rename(dst, backup); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "swap out old problem"})
+				return
+			}
+		}
+		if err := os.Rename(staging, dst); err != nil {
+			_ = os.Rename(backup, dst) // 回滾
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "install new problem"})
+			return
+		}
+		_ = os.RemoveAll(backup)
+
 		p.ProblemDir = dst
 		p.ArchivePath = filepath.Join(h.Cfg.ProblemsRoot, id+"-package"+filepath.Ext(fh.Filename))
 		_ = copyFile(tmp, p.ArchivePath)
-		p.CaseNames = strings.Join(discoverSpecCases(dst), ",")
+		p.CaseNames = strings.Join(cases, ",")
 	}
 
 	now := time.Now()

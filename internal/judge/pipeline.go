@@ -3,6 +3,7 @@ package judge
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -46,7 +47,9 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 	pl.st.DB.Save(sub)
 
 	ps := pl.workspacePaths(sub.ID)
-	for _, d := range []string{"src", "build", "logs"} {
+	// run/ 是「乾淨」執行目錄:只放編譯產物的執行檔,
+	// 不含 build tree(build tree 內有 AddJudge 複製進去的隱藏測資 case.h)。
+	for _, d := range []string{"src", "build", "run", "logs"} {
 		if err := os.MkdirAll(ps.appDir(d), 0o755); err != nil {
 			return pl.fail(sub, model.StatusIE, "mkdir workspace: "+err.Error())
 		}
@@ -64,7 +67,7 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 
 	bindLogs := ps.hostDir("logs") + ":/logs:rw"
 	bindBuildRW := ps.hostDir("build") + ":/build:rw"
-	bindBuildRO := ps.hostDir("build") + ":/build:ro"
+	bindRunRO := ps.hostDir("run") + ":/run:ro"
 	bindSrcRO := ps.hostDir("src") + ":/src:ro"
 	bindProblemRO := prob.ProblemDir + ":/problem:ro"
 
@@ -77,6 +80,8 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 		Binds:       []string{bindProblemRO, bindSrcRO, bindBuildRW, bindLogs},
 		NetworkMode: pl.cfg.JudgeBuildNetwork,
 		Timeout:     pl.cfg.JudgeBuildTimeout,
+		MemoryBytes: 2 << 30, // 2GB:Catch2 編譯吃記憶體
+		PidsLimit:   1024,
 	})
 	if err != nil {
 		return pl.fail(sub, model.StatusIE, "configure stage: "+err.Error())
@@ -97,6 +102,8 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 		Binds:       []string{bindProblemRO, bindSrcRO, bindBuildRW, bindLogs},
 		NetworkMode: pl.cfg.JudgeBuildNetwork,
 		Timeout:     pl.cfg.JudgeBuildTimeout,
+		MemoryBytes: 2 << 30,
+		PidsLimit:   1024,
 	})
 	if err != nil {
 		return pl.fail(sub, model.StatusIE, "build stage: "+err.Error())
@@ -126,17 +133,36 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 			})
 			continue
 		}
+		// 只把執行檔本身複製到乾淨 run/,避免 exec 容器看到 build tree
+		// (build tree 內含 AddJudge 注入的隱藏測資 case.h)。
+		base := filepath.Base(bin)
+		if err := copyExecutable(
+			filepath.Join(ps.appDir("build"), bin),
+			filepath.Join(ps.appDir("run"), base),
+		); err != nil {
+			results = append(results, model.CaseResult{
+				SubmissionID: sub.ID, CaseName: c, Status: model.StatusIE,
+			})
+			continue
+		}
 		runCmd := []string{"sh", "-c", fmt.Sprintf(
-			"echo '===== case %s =====' >> /logs/output.log; /build/%s >> /logs/output.log 2>&1", c, bin)}
+			"echo '===== case %s =====' >> /logs/output.log; /run/%s >> /logs/output.log 2>&1", c, base)}
 
 		start := time.Now()
 		er, err := pl.docker.run(ctx, runSpec{
 			Image:       pl.cfg.JudgeImage,
 			Cmd:         runCmd,
-			Binds:       []string{bindBuildRO, bindLogs},
+			Binds:       []string{bindRunRO, bindLogs},
 			NetworkMode: "none", // PRD:執行容器必須完全斷網
+			WorkingDir:  "/tmp", // 唯讀 rootfs 下給 cwd 一個可寫處
 			Timeout:     pl.cfg.JudgeCaseTimeout,
 			MemoryBytes: 512 << 20,
+			NanoCPUs:    1_000_000_000, // 1 vCPU
+			PidsLimit:   128,           // 擋 fork bomb
+			ReadonlyRootfs:  true,
+			DropAllCaps:     true,
+			NoNewPrivileges: true,
+			Tmpfs:           map[string]string{"/tmp": "rw,size=64m"},
 		})
 		dur := time.Since(start).Milliseconds()
 		if err != nil {
@@ -195,6 +221,27 @@ func summarize(results []model.CaseResult) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// copyExecutable 複製檔案並設為可執行(0o755)。
+func copyExecutable(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(dst, 0o755)
 }
 
 // findCaseBinary 在 build 目錄中尋找名稱以 "-<case>" 結尾的可執行檔,

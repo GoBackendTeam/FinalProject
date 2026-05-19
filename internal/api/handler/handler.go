@@ -7,6 +7,9 @@ import (
 	"github.com/GoBackendTeam/FinalProject/internal/store"
 )
 
+// MaxUploadBytes 為單次上傳壓縮檔的硬上限(擋大檔吃爆磁碟)。
+const MaxUploadBytes = 100 << 20
+
 type Handler struct {
 	Cfg    *config.Config
 	Store  *store.Store

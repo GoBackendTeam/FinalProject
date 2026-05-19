@@ -17,20 +17,47 @@ import (
 
 var ErrUnsupported = errors.New("unsupported archive format")
 
-const maxFileSize = 64 << 20 // 單檔上限 64MB,避免解壓炸彈
+const (
+	maxFileSize  = 64 << 20  // 單檔解壓上限 64MB
+	maxTotalSize = 256 << 20 // 解壓後總量上限 256MB(擋 zip bomb)
+	maxEntries   = 4000      // 條目數上限(擋大量小檔)
+)
+
+// guard 追蹤解壓累計量,超限即中止(對抗 zip bomb / 巨量條目)。
+type guard struct {
+	totalBytes int64
+	entries    int
+}
+
+func (g *guard) addEntry() error {
+	g.entries++
+	if g.entries > maxEntries {
+		return fmt.Errorf("archive has too many entries (> %d)", maxEntries)
+	}
+	return nil
+}
+
+func (g *guard) addBytes(n int64) error {
+	g.totalBytes += n
+	if g.totalBytes > maxTotalSize {
+		return fmt.Errorf("archive uncompressed size exceeds %d bytes", maxTotalSize)
+	}
+	return nil
+}
 
 // Extract 將 archivePath 解壓到 destDir(必須已存在且為空)。
 // 解壓後若內容全部位於單一頂層資料夾下,會自動把該層攤平。
 func Extract(archivePath, destDir string) error {
 	lower := strings.ToLower(archivePath)
+	g := &guard{}
 	var err error
 	switch {
 	case strings.HasSuffix(lower, ".zip"):
-		err = extractZip(archivePath, destDir)
+		err = extractZip(archivePath, destDir, g)
 	case strings.HasSuffix(lower, ".tar"):
-		err = extractTar(archivePath, destDir, false)
+		err = extractTar(archivePath, destDir, false, g)
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		err = extractTar(archivePath, destDir, true)
+		err = extractTar(archivePath, destDir, true, g)
 	default:
 		return ErrUnsupported
 	}
@@ -50,13 +77,16 @@ func safeJoin(dest, name string) (string, error) {
 	return target, nil
 }
 
-func extractZip(src, dest string) error {
+func extractZip(src, dest string, g *guard) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 	for _, f := range r.File {
+		if err := g.addEntry(); err != nil {
+			return err
+		}
 		target, err := safeJoin(dest, f.Name)
 		if err != nil {
 			return err
@@ -74,7 +104,7 @@ func extractZip(src, dest string) error {
 		if err != nil {
 			return err
 		}
-		err = writeFile(target, rc)
+		err = writeFile(target, rc, g)
 		rc.Close()
 		if err != nil {
 			return err
@@ -83,7 +113,7 @@ func extractZip(src, dest string) error {
 	return nil
 }
 
-func extractTar(src, dest string, gzipped bool) error {
+func extractTar(src, dest string, gzipped bool, g *guard) error {
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -109,6 +139,9 @@ func extractTar(src, dest string, gzipped bool) error {
 		if err != nil {
 			return err
 		}
+		if err := g.addEntry(); err != nil {
+			return err
+		}
 		target, err := safeJoin(dest, hdr.Name)
 		if err != nil {
 			return err
@@ -122,7 +155,7 @@ func extractTar(src, dest string, gzipped bool) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			if err := writeFile(target, tr); err != nil {
+			if err := writeFile(target, tr, g); err != nil {
 				return err
 			}
 		}
@@ -130,16 +163,21 @@ func extractTar(src, dest string, gzipped bool) error {
 	return nil
 }
 
-func writeFile(target string, r io.Reader) error {
+func writeFile(target string, r io.Reader, g *guard) error {
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	if _, err := io.CopyN(out, r, maxFileSize); err != nil && !errors.Is(err, io.EOF) {
+	// 多讀 1 byte:若還有資料代表超過單檔上限 → 明確報錯而非靜默截斷。
+	n, err := io.Copy(out, io.LimitReader(r, maxFileSize+1))
+	if err != nil {
 		return err
 	}
-	return nil
+	if n > maxFileSize {
+		return fmt.Errorf("file %q exceeds per-file limit of %d bytes", filepath.Base(target), maxFileSize)
+	}
+	return g.addBytes(n)
 }
 
 // flattenSingleRoot:若 destDir 下只有一個項目且為目錄,將其內容上提一層。
