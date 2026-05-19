@@ -1,0 +1,20 @@
+# build
+/bin/
+/tmp/
+*.exe
+
+# secrets / keys
+/keys/*.pem
+.env
+
+# judge runtime workspace
+/workspace/
+/.workspace/
+
+# go
+vendor/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

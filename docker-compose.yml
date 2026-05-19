@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: regs
+      POSTGRES_PASSWORD: regs
+      POSTGRES_DB: regs
+    # 用 5433 避開主機既有的原生 PostgreSQL(常佔 5432)。
+    ports:
+      - "5433:5432"
+    volumes:
+      - regs-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U regs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # app 預設由開發者在「主機」上跑(go run ./cmd/server),
+  # 這樣 judge 容器的 bind mount 路徑與 app 看到的一致,最單純。
+  # 若要把 app 也容器化(DooD),取消下面註解並務必讓
+  # JUDGE_WORKSPACE_HOST 指向主機真實路徑,且掛入 docker.sock。
+  #
+  # app:
+  #   build: .
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   environment:
+  #     DATABASE_URL: postgres://regs:regs@db:5432/regs?sslmode=disable
+  #     JUDGE_WORKSPACE: /workspace
+  #     JUDGE_WORKSPACE_HOST: ${PWD}/workspace
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ${PWD}/workspace:/workspace
+  #     - ${PWD}/problems:/app/problems:ro
+  #     - ${PWD}/keys:/app/keys:ro
+
+volumes:
+  regs-pgdata:
