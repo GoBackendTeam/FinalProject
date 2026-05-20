@@ -8,11 +8,16 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+// judgeLabel 為所有 judge 容器一致使用的標籤,
+// 服務啟動時憑此標籤清掉前次崩潰留下的孤兒容器。
+const judgeLabel = "regs.judge"
 
 // dockerRunner 封裝判題所需的 Docker Engine API 呼叫。
 type dockerRunner struct {
@@ -44,6 +49,25 @@ func newDockerRunner(platform string) (*dockerRunner, error) {
 func (d *dockerRunner) ping(ctx context.Context) error {
 	_, err := d.cli.Ping(ctx)
 	return err
+}
+
+// cleanupOrphans 移除前次崩潰留下的所有 judge 容器(以 label 辨識)。
+// 服務啟動時呼叫一次,避免孤兒容器持續持有 build/ bind mount 干擾新評測。
+func (d *dockerRunner) cleanupOrphans(ctx context.Context) (int, error) {
+	list, err := d.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", judgeLabel+"=true")),
+	})
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, c := range list {
+		if err := d.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err == nil {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // ensureNetwork 確保編譯容器用的 bridge network 存在(與執行容器的 none 分屬不同網段)。
@@ -108,6 +132,7 @@ func (d *dockerRunner) run(ctx context.Context, spec runSpec) (runResult, error)
 		Tty:          false,
 		AttachStdout: false,
 		AttachStderr: false,
+		Labels:       map[string]string{judgeLabel: "true"},
 	}
 	resCfg := container.Resources{
 		Memory:   spec.MemoryBytes,

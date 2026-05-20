@@ -2,6 +2,7 @@ package judge
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -10,6 +11,10 @@ import (
 	"github.com/GoBackendTeam/FinalProject/internal/model"
 	"github.com/GoBackendTeam/FinalProject/internal/store"
 )
+
+// ErrAlreadyRunning:對「尚未跑完(PENDING/RUNNING)」的提交不允許再次 Rerun,
+// 避免雙重執行同一筆 submission 造成結果互寫。
+var ErrAlreadyRunning = errors.New("submission is still pending or running")
 
 // Engine 為非同步評測引擎:Job Queue + Semaphore 併發控制。
 //
@@ -55,6 +60,11 @@ func (e *Engine) Start(ctx context.Context) {
 	if err := e.docker.ping(pingCtx); err != nil {
 		log.Printf("[judge] WARNING: docker daemon 無法連線(%v);提交會入列但無法評測,請啟動 Docker 後重跑 job", err)
 	} else {
+		if n, err := e.docker.cleanupOrphans(ctx); err != nil {
+			log.Printf("[judge] WARNING: 孤兒容器清理失敗: %v", err)
+		} else if n > 0 {
+			log.Printf("[judge] 已清理 %d 個前次留下的孤兒容器", n)
+		}
 		if err := e.docker.ensureNetwork(ctx, e.cfg.JudgeBuildNetwork); err != nil {
 			log.Printf("[judge] WARNING: 無法建立 build network %q: %v", e.cfg.JudgeBuildNetwork, err)
 		}
@@ -71,6 +81,35 @@ func (e *Engine) Start(ctx context.Context) {
 
 	go e.dispatch()
 	log.Printf("[judge] engine started (max concurrency=%d, image=%s)", e.cfg.JudgeMaxConcurrency, e.cfg.JudgeImage)
+
+	// 重啟恢復:把上次崩潰/重啟時還沒跑完的提交重新入列。
+	go e.recoverIncomplete()
+}
+
+// recoverIncomplete 掃描 DB,把卡在 PENDING/RUNNING 的提交重設為 PENDING
+// 並重新入列,讓服務重啟後不會有 submission 永遠卡住。
+func (e *Engine) recoverIncomplete() {
+	var subs []model.Submission
+	if err := e.st.DB.Where("status IN ?", []model.Status{model.StatusPending, model.StatusRunning}).
+		Find(&subs).Error; err != nil {
+		log.Printf("[judge] recover scan failed: %v", err)
+		return
+	}
+	if len(subs) == 0 {
+		return
+	}
+	log.Printf("[judge] recovering %d incomplete submission(s) after restart", len(subs))
+	for _, s := range subs {
+		e.st.DB.Model(&model.Submission{}).Where("id = ?", s.ID).
+			Updates(map[string]any{
+				"status":      model.StatusPending,
+				"message":     "",
+				"started_at":  nil,
+				"finished_at": nil,
+			})
+		e.st.DB.Where("submission_id = ?", s.ID).Delete(&model.CaseResult{})
+		e.Enqueue(s.ID)
+	}
 }
 
 func (e *Engine) dispatch() {
@@ -113,7 +152,15 @@ func (e *Engine) Enqueue(submissionID string) {
 }
 
 // Rerun 重設提交狀態並重新入列。
+// 若該提交尚未跑完(PENDING/RUNNING),拒絕,避免雙重執行覆寫結果。
 func (e *Engine) Rerun(submissionID string) error {
+	var sub model.Submission
+	if err := e.st.DB.Select("id", "status").First(&sub, "id = ?", submissionID).Error; err != nil {
+		return err
+	}
+	if sub.Status == model.StatusPending || sub.Status == model.StatusRunning {
+		return ErrAlreadyRunning
+	}
 	if err := e.st.DB.Model(&model.Submission{}).
 		Where("id = ?", submissionID).
 		Updates(map[string]any{

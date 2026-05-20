@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GoBackendTeam/FinalProject/internal/api/middleware"
+	"github.com/GoBackendTeam/FinalProject/internal/judge"
 	"github.com/GoBackendTeam/FinalProject/internal/model"
 	"github.com/GoBackendTeam/FinalProject/internal/store"
 	"github.com/gin-gonic/gin"
@@ -161,6 +163,10 @@ func (h *Handler) RerunSubmission(c *gin.Context) {
 		return
 	}
 	if err := h.Engine.Rerun(sub.ID); err != nil {
+		if errors.Is(err, judge.ErrAlreadyRunning) {
+			c.JSON(http.StatusConflict, gin.H{"error": "submission still pending or running; wait for it to finish"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "rerun failed"})
 		return
 	}

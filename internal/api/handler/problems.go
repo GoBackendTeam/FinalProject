@@ -1,7 +1,11 @@
 package handler
 
 import (
+	"archive/zip"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -148,17 +152,62 @@ func (h *Handler) DeleteProblem(c *gin.Context) {
 }
 
 // DownloadTestcases:Admin 下載題目壓縮檔。
+// 若有 admin 上傳的壓縮檔(ArchivePath)直接回;沒有(例如從 PROBLEMS_ROOT
+// 自動 seed 的題目)就即時把 ProblemDir 打包成 zip 串流回傳。
 func (h *Handler) DownloadTestcases(c *gin.Context) {
 	var p model.Problem
 	if err := h.Store.DB.First(&p, "id = ?", c.Param("problem_id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "problem not found"})
 		return
 	}
-	if p.ArchivePath == "" || !fileExists(p.ArchivePath) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "no archive stored for this problem"})
+	if p.ArchivePath != "" && fileExists(p.ArchivePath) {
+		c.FileAttachment(p.ArchivePath, p.ID+filepath.Ext(p.ArchivePath))
 		return
 	}
-	c.FileAttachment(p.ArchivePath, p.ID+filepath.Ext(p.ArchivePath))
+	if p.ProblemDir == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no archive or problem directory available"})
+		return
+	}
+	streamProblemDirAsZip(c, p.ID, p.ProblemDir)
+}
+
+func streamProblemDirAsZip(c *gin.Context, problemID, dir string) {
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, problemID))
+	zw := zip.NewWriter(c.Writer)
+	defer zw.Close()
+	base := filepath.Clean(dir)
+	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if name == ".DS_Store" || strings.HasPrefix(name, "._") {
+			return nil
+		}
+		rel, err := filepath.Rel(base, path)
+		if err != nil {
+			return err
+		}
+		w, err := zw.Create(filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
+	})
+	if err != nil {
+		// headers 已送出,只能 log。
+		log.Printf("[problems] stream zip %s: %v", problemID, err)
+	}
 }
 
 func discoverSpecCases(problemDir string) []string {
