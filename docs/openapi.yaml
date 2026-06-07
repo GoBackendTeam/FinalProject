@@ -1,69 +1,139 @@
 openapi: 3.0.3
 info:
   title: REGS — 線上自動評測系統 API
-  version: "1.0.0"
+  version: "1.1.0"
   description: |
-    CS3060701 期末專案。權限階層 Guest < User < Admin。
-    標示 security 的端點需 `Authorization: Bearer <JWT>`(ES256 / EC P-256)。
+    CS3060701 期末專案。Go 後端,接收 C++ 專案壓縮檔,在隔離容器內以 CMake + Ninja + Clang
+    自動編譯,逐 case 在斷網容器執行 Catch2 判題,回報 AC / WA / CE / RE / TLE / SE。
+
+    **權限階層**:`Guest < User < Admin`。標示 `security: bearerAuth` 的端點需帶
+    `Authorization: Bearer <JWT>`(ES256 / EC P-256)。缺 token → 401;角色不足 → 403。
+
+    互動式文件:啟動服務後開 `GET /docs`(Scalar)。本規格檔由 `GET /openapi.yaml` 提供。
 servers:
   - url: http://localhost:8080
+    description: 本機開發
+tags:
+  - name: System
+  - name: UserInfo
+  - name: Problem
+  - name: Submission
+  - name: Statistics
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: 缺少或無效的 JWT
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: 角色權限不足,或非本人資源
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: 找不到資源
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
     Error:
       type: object
       properties:
-        error: { type: string }
+        error: { type: string, example: "missing Authorization header" }
+    Status:
+      type: string
+      description: 提交或單一 case 的評測狀態
+      enum: [PENDING, RUNNING, AC, WA, CE, RE, TLE, SE, IE]
+    PublicUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { type: string, enum: [user, admin] }
+        created_at: { type: string, format: date-time }
     TokenResponse:
       type: object
       properties:
-        token: { type: string }
+        token: { type: string, description: "JWT(ES256)" }
         token_type: { type: string, example: Bearer }
-        user:
-          type: object
-          properties:
-            id: { type: string }
-            username: { type: string }
-            role: { type: string, enum: [user, admin] }
+        user: { $ref: "#/components/schemas/PublicUser" }
     Problem:
       type: object
       properties:
         id: { type: string, example: "113final006" }
-        title: { type: string }
+        title: { type: string, example: "Operator Overloading" }
         description: { type: string }
         cases:
           type: array
           items: { type: string }
+          example: ["case1", "case2", "case3", "case4", "case5"]
     CaseResult:
       type: object
       properties:
-        case_name: { type: string }
-        status: { type: string, enum: [AC, WA, CE, RE, TLE, SE, IE] }
-        exit_code: { type: integer }
-        duration_ms: { type: integer, format: int64 }
+        case_name: { type: string, example: "case1" }
+        status: { $ref: "#/components/schemas/Status" }
+        exit_code: { type: integer, example: 0 }
+        duration_ms: { type: integer, format: int64, example: 132 }
     Submission:
       type: object
       properties:
-        operatorId: { type: string }
-        user_id: { type: string }
-        problem_id: { type: string }
-        status:
-          type: string
-          enum: [PENDING, RUNNING, AC, WA, CE, RE, TLE, SE, IE]
-        message: { type: string }
+        operatorId: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        problem_id: { type: string, example: "113final006" }
+        status: { $ref: "#/components/schemas/Status" }
+        message: { type: string, example: "AC=5" }
         created_at: { type: string, format: date-time }
-        started_at: { type: string, format: date-time }
-        finished_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
         case_results:
           type: array
           items: { $ref: "#/components/schemas/CaseResult" }
+    SubmissionList:
+      type: object
+      properties:
+        submissions:
+          type: array
+          items: { $ref: "#/components/schemas/Submission" }
+    StatsResponse:
+      type: object
+      properties:
+        total: { type: integer, example: 4 }
+        by_status:
+          type: object
+          additionalProperties: { type: integer }
+          example: { AC: 2, WA: 1, CE: 1 }
+        problem_id: { type: string, nullable: true }
+        user_id: { type: string, nullable: true }
+    LogResponse:
+      type: object
+      properties:
+        stage: { type: string, enum: [configure, compile, output] }
+        log: { type: string, description: "該階段完整日誌;不存在時回空字串" }
 paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: 健康檢查(Guest)
+      responses:
+        "200":
+          description: ok
+          content: { application/json: { schema: { type: object, properties: { status: { type: string, example: ok } } } } }
+  /docs:
+    get:
+      tags: [System]
+      summary: 互動式 API 文件(Scalar)
+      responses:
+        "200": { description: HTML 頁面 }
+  /openapi.yaml:
+    get:
+      tags: [System]
+      summary: OpenAPI 規格檔
+      responses:
+        "200": { description: YAML 規格 }
+
   /api/users/register:
     post:
+      tags: [UserInfo]
       summary: 註冊新使用者(Guest)
       requestBody:
         required: true
@@ -73,13 +143,24 @@ paths:
               type: object
               required: [username, password]
               properties:
-                username: { type: string }
-                password: { type: string, minLength: 4 }
+                username: { type: string, example: alice }
+                password: { type: string, minLength: 4, example: pass }
       responses:
-        "201": { description: created }
-        "409": { description: username taken, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "201":
+          description: created(角色固定為 user)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  username: { type: string }
+                  role: { type: string, example: user }
+        "400": { description: 欄位驗證失敗, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: username 已存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/users/login:
     post:
+      tags: [UserInfo]
       summary: 登入並簽發 JWT(Guest)
       requestBody:
         required: true
@@ -89,33 +170,61 @@ paths:
               type: object
               required: [username, password]
               properties:
-                username: { type: string }
-                password: { type: string }
+                username: { type: string, example: alice }
+                password: { type: string, example: pass }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TokenResponse" } } } }
-        "401": { description: invalid credentials }
+        "400": { description: 欄位驗證失敗, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: 帳密錯誤, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/users/logout:
     post:
-      summary: 登出(User)
+      tags: [UserInfo]
+      summary: 登出(User)。JWT 無狀態,實際由客戶端丟棄 token
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: ok } }
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/users/me:
     get:
+      tags: [UserInfo]
       summary: 取得目前登入者資料(User)
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: ok }, "401": { description: unauthorized } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PublicUser" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/users/{user_id}/submissions:
     get:
-      summary: 取得指定使用者的提交紀錄(Guest)
+      tags: [UserInfo]
+      summary: 取得指定使用者的提交紀錄列表(Guest)
       parameters:
         - { name: user_id, in: path, required: true, schema: { type: string } }
-      responses: { "200": { description: ok } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SubmissionList" } } } }
+
   /api/problems:
     get:
+      tags: [Problem]
       summary: 題目列表(Guest)
-      responses: { "200": { description: ok } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  problems:
+                    type: array
+                    items: { $ref: "#/components/schemas/Problem" }
     put:
-      summary: 建立或更新題目(Admin)。JSON metadata 或 multipart(欄位 archive 上傳題目壓縮檔)
+      tags: [Problem]
+      summary: 建立或更新題目(Admin)
+      description: |
+        兩種模式:
+        - **JSON**:只改 metadata(title / description)。
+        - **multipart/form-data**:附 `archive` 上傳題目壓縮檔,解壓後驗證(根目錄需有
+          `CMakeLists.txt`、`spec/` 需有 case),通過才原子替換題庫並重新登錄 case。
       security: [{ bearerAuth: [] }]
       requestBody:
         content:
@@ -124,37 +233,60 @@ paths:
               type: object
               required: [id]
               properties:
-                id: { type: string }
+                id: { type: string, example: "113final006" }
                 title: { type: string }
                 description: { type: string }
           multipart/form-data:
             schema:
               type: object
+              required: [id]
               properties:
                 id: { type: string }
                 title: { type: string }
                 description: { type: string }
                 archive: { type: string, format: binary }
-      responses: { "200": { description: updated }, "201": { description: created }, "401": { description: unauthorized } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "400": { description: 壞包 / 缺 CMakeLists / 無 case, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { description: 上傳超過 100MB }
   /api/problems/{problem_id}:
     get:
+      tags: [Problem]
       summary: 單一題目描述(Guest)
       parameters: [{ name: problem_id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } } }, "404": { description: not found } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
+      tags: [Problem]
       summary: 刪除題目(Admin)
       security: [{ bearerAuth: [] }]
       parameters: [{ name: problem_id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: deleted }, "401": { description: unauthorized } }
+      responses:
+        "200": { description: deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /api/problems/{problem_id}/testcases:
     get:
+      tags: [Problem]
       summary: 下載題目壓縮檔(Admin)
+      description: 有 admin 上傳的壓縮檔則直接回;否則即時把題庫目錄打包成 zip 串流回傳。
       security: [{ bearerAuth: [] }]
       parameters: [{ name: problem_id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: archive (binary) }, "404": { description: no archive } }
+      responses:
+        "200": { description: zip (binary), content: { application/zip: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/submissions:
     post:
-      summary: 提交程式碼進行評測(User)。立即回 operatorId,背景評測
+      tags: [Submission]
+      summary: 提交程式碼進行評測(User)
+      description: 立即回 `operatorId`(202),評測在背景非同步進行;之後輪詢 `GET /api/submissions/{operatorId}`。
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -164,55 +296,99 @@ paths:
               type: object
               required: [problem_id, file]
               properties:
-                problem_id: { type: string }
-                file: { type: string, format: binary, description: "zip/tar/tgz,不含前導資料夾" }
+                problem_id: { type: string, example: "113final006" }
+                file: { type: string, format: binary, description: "zip / tar / tgz,內容不含前導資料夾" }
       responses:
         "202":
-          description: accepted
-          content: { application/json: { schema: { type: object, properties: { operatorId: { type: string }, status: { type: string } } } } }
-        "401": { description: unauthorized }
+          description: accepted(已入列)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operatorId: { type: string, format: uuid }
+                  status: { $ref: "#/components/schemas/Status" }
+        "400": { description: 缺 problem_id 或 file, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: problem 不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: 上傳超過 100MB }
     get:
+      tags: [Submission]
       summary: 查詢個人提交紀錄列表(User)
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: ok } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/SubmissionList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/submissions/{operatorId}:
     get:
+      tags: [Submission]
       summary: 取得單一提交評測結果(User;Admin 可查他人)
       security: [{ bearerAuth: [] }]
       parameters: [{ name: operatorId, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Submission" } } } }
-        "403": { description: not your submission }
-        "404": { description: not found }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/submissions/{operatorId}/source:
     get:
+      tags: [Submission]
       summary: 下載提交的原始專案檔(User;Admin 可查他人)
       security: [{ bearerAuth: [] }]
       parameters: [{ name: operatorId, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: archive (binary) }, "404": { description: missing } }
+      responses:
+        "200": { description: archive (binary), content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: 原始檔遺失或提交不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/submissions/{operatorId}/logs/{stage}:
     get:
-      summary: 多分段日誌查詢(User;Admin 可查他人)
+      tags: [Submission]
+      summary: 分段日誌查詢(User;Admin 可查他人)
+      description: "stage ∈ configure | compile | output。對應 CMake 設定 / 編譯 / 逐 case 執行三段輸出。日誌不存在時回 200 且 log 為空字串。"
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: operatorId, in: path, required: true, schema: { type: string } }
         - { name: stage, in: path, required: true, schema: { type: string, enum: [configure, compile, output] } }
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: object, properties: { stage: { type: string }, log: { type: string } } } } } }
-        "400": { description: bad stage }
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/LogResponse" } } } }
+        "400": { description: stage 不合法, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/submissions/{operatorId}/rerun:
     post:
+      tags: [Submission]
       summary: 重新執行某個評測 Job(User;Admin 可重跑他人)
+      description: 重設狀態並重新入列。若該提交仍在 PENDING / RUNNING,拒絕(409),避免雙重執行覆寫結果。
       security: [{ bearerAuth: [] }]
       parameters: [{ name: operatorId, in: path, required: true, schema: { type: string } }]
-      responses: { "202": { description: re-queued } }
+      responses:
+        "202":
+          description: re-queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operatorId: { type: string }
+                  status: { $ref: "#/components/schemas/Status" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: 仍在 pending/running, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
   /api/stats/problems/{problem_id}:
     get:
-      summary: 題目統計(Guest)
+      tags: [Statistics]
+      summary: 題目統計(Guest)。各狀態提交數彙總
       parameters: [{ name: problem_id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/StatsResponse" } } } }
   /api/stats/users/{user_id}:
     get:
-      summary: 使用者統計(Guest)
+      tags: [Statistics]
+      summary: 使用者統計(Guest)。各狀態提交數彙總
       parameters: [{ name: user_id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: ok } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/StatsResponse" } } } }

@@ -73,7 +73,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" localhost:8080/api/submissions
 
 ## API
 
-完整規格見 [`docs/openapi.yaml`](docs/openapi.yaml);資料庫關係見 [`docs/ERD.md`](docs/ERD.md)。
+**互動式文件**:服務啟動後開 <http://localhost:8080/docs>(Scalar 渲染,內建 API console)。
+原始規格由 `GET /openapi.yaml` 提供。
+
+完整規格見 [`docs/openapi.yaml`](docs/openapi.yaml);資料庫關係見 [`docs/ERD.md`](docs/ERD.md);
+雲端部署評估見 [`docs/CLOUD_READINESS.md`](docs/CLOUD_READINESS.md)。
 
 權限:`Guest < User < Admin`。標 *(User/Admin)* 的端點必須帶 `Authorization: Bearer <JWT>`。
 

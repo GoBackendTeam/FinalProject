@@ -26,6 +26,9 @@ type Config struct {
 	JudgeCaseTimeout   time.Duration
 	JudgeBuildTimeout  time.Duration
 	JudgeBuildNetwork  string
+
+	// OpenAPISpecPath 為 OpenAPI YAML 的路徑,由 /docs 互動文件載入。
+	OpenAPISpecPath string
 }
 
 func env(key, def string) string {
@@ -61,6 +64,7 @@ func Load() (*Config, error) {
 		JudgeCaseTimeout:    time.Duration(envInt("JUDGE_CASE_TIMEOUT", 10)) * time.Second,
 		JudgeBuildTimeout:   time.Duration(envInt("JUDGE_BUILD_TIMEOUT", 120)) * time.Second,
 		JudgeBuildNetwork:   env("JUDGE_BUILD_NETWORK", "regs-build"),
+		OpenAPISpecPath:     env("OPENAPI_SPEC_PATH", "./docs/openapi.yaml"),
 	}
 
 	abs := func(p string) string {

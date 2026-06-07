@@ -17,6 +17,13 @@ func NewRouter(h *handler.Handler, jm *auth.Manager) *gin.Engine {
 
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
+	// 互動式 API 文件(Scalar)+ OpenAPI 規格檔。
+	specPath := "./docs/openapi.yaml"
+	if h.Cfg != nil && h.Cfg.OpenAPISpecPath != "" {
+		specPath = h.Cfg.OpenAPISpecPath
+	}
+	registerDocs(r, specPath)
+
 	api := r.Group("/api")
 
 	user := middleware.RequireRole(jm, model.RoleUser)

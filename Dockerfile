@@ -10,5 +10,6 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=build /out/server /app/server
 COPY problems /app/problems
+COPY docs /app/docs
 EXPOSE 8080
 ENTRYPOINT ["/app/server"]
