@@ -31,7 +31,7 @@ func aggregate(results []model.CaseResult) model.Status {
 	if len(results) == 0 {
 		return model.StatusIE
 	}
-	hasRE, hasTLE, hasWA := false, false, false
+	hasRE, hasTLE, hasWA, hasCE := false, false, false, false
 	for _, r := range results {
 		switch r.Status {
 		case model.StatusRE:
@@ -40,6 +40,8 @@ func aggregate(results []model.CaseResult) model.Status {
 			hasTLE = true
 		case model.StatusWA:
 			hasWA = true
+		case model.StatusCE:
+			hasCE = true
 		}
 	}
 	switch {
@@ -49,6 +51,8 @@ func aggregate(results []model.CaseResult) model.Status {
 		return model.StatusTLE
 	case hasWA:
 		return model.StatusWA
+	case hasCE:
+		return model.StatusCE
 	default:
 		return model.StatusAC
 	}

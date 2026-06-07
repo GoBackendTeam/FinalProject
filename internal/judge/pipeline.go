@@ -263,8 +263,10 @@ func findCaseBinary(buildDir, caseName string) (string, error) {
 		if !strings.HasSuffix(name, suffix) {
 			return nil
 		}
-		info, e := dCase.Info()
-		if e != nil || info.Mode()&0o111 == 0 {
+		// Do not check the execute bit: on Windows NTFS bind-mounts the bit
+		// is never set even for valid ELF binaries compiled inside the container.
+		// The suffix match is specific enough to identify the correct binary.
+		if _, e := dCase.Info(); e != nil {
 			return nil
 		}
 		rel, _ := filepath.Rel(buildDir, path)
