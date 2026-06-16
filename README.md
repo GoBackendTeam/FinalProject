@@ -75,6 +75,15 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" localhost:8080/api/submissions
 
 完整規格見 [`docs/openapi.yaml`](docs/openapi.yaml);資料庫關係見 [`docs/ERD.md`](docs/ERD.md)。
 
+伺服器啟動後可直接瀏覽互動式文件(規格內嵌於 binary,免額外部署):
+
+| 路徑 | 說明 |
+|---|---|
+| `GET /swagger` | Swagger UI(可 Try it out) |
+| `GET /redoc` | ReDoc(適合閱讀) |
+| `GET /openapi.yaml` | 原始 OpenAPI 3.0 規格 |
+| `GET /docs` | 轉址至 `/swagger` |
+
 權限:`Guest < User < Admin`。標 *(User/Admin)* 的端點必須帶 `Authorization: Bearer <JWT>`。
 
 | 方法 | 路徑 | 權限 |
