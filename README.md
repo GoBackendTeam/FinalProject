@@ -79,10 +79,10 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" localhost:8080/api/submissions
 
 | 路徑 | 說明 |
 |---|---|
-| `GET /swagger` | Swagger UI(可 Try it out) |
-| `GET /redoc` | ReDoc(適合閱讀) |
+| `GET /docs` | Scalar 互動式文件(內建 API console) |
 | `GET /openapi.yaml` | 原始 OpenAPI 3.0 規格 |
-| `GET /docs` | 轉址至 `/swagger` |
+
+> UI 的 renderer 由 CDN 載入,瀏覽器需可連外網;`docs/CLOUD_READINESS.md` 為雲端部署評估。
 
 權限:`Guest < User < Admin`。標 *(User/Admin)* 的端點必須帶 `Authorization: Bearer <JWT>`。
 

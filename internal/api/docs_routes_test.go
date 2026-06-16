@@ -22,9 +22,7 @@ func TestDocRoutes(t *testing.T) {
 		wantContain string
 	}{
 		{"/openapi.yaml", 200, "application/yaml", "openapi: 3.0.3"},
-		{"/swagger", 200, "text/html", "swagger-ui"},
-		{"/redoc", 200, "text/html", "redoc"},
-		{"/docs", 302, "", ""}, // redirect → /swagger
+		{"/docs", 200, "text/html", "api-reference"}, // Scalar
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodGet, c.path, nil)

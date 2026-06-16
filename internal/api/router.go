@@ -19,17 +19,14 @@ func NewRouter(h *handler.Handler, jm *auth.Manager) *gin.Engine {
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
 	// ---- API 文件(規格 + 互動式 UI),皆為 Guest 可存取 ----
+	// 規格以 go:embed 打包進 binary,單一真相來源為 docs/openapi.yaml。
 	r.GET("/openapi.yaml", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/yaml; charset=utf-8", docs.OpenAPIYAML)
 	})
-	r.GET("/swagger", func(c *gin.Context) {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", docs.SwaggerHTML)
+	// /docs:Scalar 互動式文件(內建 API console),從 /openapi.yaml 載入規格。
+	r.GET("/docs", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", docs.ScalarHTML)
 	})
-	r.GET("/redoc", func(c *gin.Context) {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", docs.RedocHTML)
-	})
-	// /docs 導向 Swagger UI,方便記憶。
-	r.GET("/docs", func(c *gin.Context) { c.Redirect(http.StatusFound, "/swagger") })
 
 	api := r.Group("/api")
 
