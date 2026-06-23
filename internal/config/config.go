@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	JWTTTL            time.Duration
 
 	ProblemsRoot       string
+	ProblemsRootHost   string // 對應的主機路徑(bind mount 用)
 	JudgeWorkspace     string // app 視角的工作目錄
 	JudgeWorkspaceHost string // 對應的主機路徑(bind mount 用)
 	JudgeImage         string
@@ -53,6 +55,7 @@ func Load() (*Config, error) {
 		JWTPublicKeyPath:    env("JWT_PUBLIC_KEY_PATH", "./keys/public.pem"),
 		JWTTTL:              time.Duration(envInt("JWT_TTL_HOURS", 12)) * time.Hour,
 		ProblemsRoot:        env("PROBLEMS_ROOT", "./problems"),
+		ProblemsRootHost:    env("PROBLEMS_ROOT_HOST", ""),
 		JudgeWorkspace:      env("JUDGE_WORKSPACE", "./workspace"),
 		JudgeWorkspaceHost:  env("JUDGE_WORKSPACE_HOST", ""),
 		JudgeImage:          env("JUDGE_IMAGE", "yhlib/cs3060701"),
@@ -72,11 +75,36 @@ func Load() (*Config, error) {
 	c.ProblemsRoot = abs(c.ProblemsRoot)
 	c.JudgeWorkspace = abs(c.JudgeWorkspace)
 	// app 直接跑在主機時,主機路徑等於 app 路徑。
+	if c.ProblemsRootHost == "" {
+		c.ProblemsRootHost = c.ProblemsRoot
+	} else {
+		c.ProblemsRootHost = abs(c.ProblemsRootHost)
+	}
 	if c.JudgeWorkspaceHost == "" {
 		c.JudgeWorkspaceHost = c.JudgeWorkspace
+	} else {
+		c.JudgeWorkspaceHost = abs(c.JudgeWorkspaceHost)
 	}
 	if c.JudgeMaxConcurrency < 1 {
 		c.JudgeMaxConcurrency = 1
 	}
 	return c, nil
+}
+
+// PathForBind 把 app 視角下的絕對路徑轉成 Docker daemon 可掛載的主機路徑。
+// appRoot 為 app 視角根目錄(例如 ProblemsRoot),hostRoot 為對應主機路徑。
+func PathForBind(appPath, appRoot, hostRoot string) string {
+	if hostRoot == appRoot {
+		return appPath
+	}
+	rel, err := filepath.Rel(appRoot, appPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return appPath
+	}
+	return filepath.Join(hostRoot, rel)
+}
+
+// ProblemDirForBind 回傳題庫目錄在 judge 容器 bind mount 用的主機路徑。
+func (c *Config) ProblemDirForBind(problemDir string) string {
+	return PathForBind(problemDir, c.ProblemsRoot, c.ProblemsRootHost)
 }

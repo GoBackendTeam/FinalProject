@@ -6,6 +6,9 @@ keys:
 db:
 	docker compose up -d db
 
+up: keys
+	docker compose up -d --build
+
 down:
 	docker compose down
 

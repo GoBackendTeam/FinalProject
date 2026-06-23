@@ -69,7 +69,7 @@ func (pl *pipeline) Run(ctx context.Context, sub *model.Submission, prob *model.
 	bindBuildRW := ps.hostDir("build") + ":/build:rw"
 	bindRunRO := ps.hostDir("run") + ":/run:ro"
 	bindSrcRO := ps.hostDir("src") + ":/src:ro"
-	bindProblemRO := prob.ProblemDir + ":/problem:ro"
+	bindProblemRO := pl.cfg.ProblemDirForBind(prob.ProblemDir) + ":/problem:ro"
 
 	// 2) Configure 階段(失敗 → SE),日誌 → configure.log
 	confCmd := []string{"sh", "-c",

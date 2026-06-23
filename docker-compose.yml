@@ -16,27 +16,30 @@ services:
       timeout: 3s
       retries: 10
 
-  # app 預設由開發者在「主機」上跑(go run ./cmd/server),
-  # 這樣 judge 容器的 bind mount 路徑與 app 看到的一致,最單純。
-  # 若要把 app 也容器化(DooD),取消下面註解並務必讓
-  # JUDGE_WORKSPACE_HOST 指向主機真實路徑,且掛入 docker.sock。
-  #
-  # app:
-  #   build: .
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   environment:
-  #     DATABASE_URL: postgres://regs:regs@db:5432/regs?sslmode=disable
-  #     JUDGE_WORKSPACE: /workspace
-  #     JUDGE_WORKSPACE_HOST: ${PWD}/workspace
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - ${PWD}/workspace:/workspace
-  #     - ${PWD}/problems:/app/problems:ro
-  #     - ${PWD}/keys:/app/keys:ro
+  # app 容器化(DooD):掛 docker.sock,並用 *_HOST 讓 judge bind mount 指向主機路徑。
+  # 開發時也可在主機直接 `make run`,不必啟動此服務。
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://regs:regs@db:5432/regs?sslmode=disable
+      PROBLEMS_ROOT: /app/problems
+      PROBLEMS_ROOT_HOST: ${PWD}/problems
+      JUDGE_WORKSPACE: /workspace
+      JUDGE_WORKSPACE_HOST: ${PWD}/workspace
+      JUDGE_PLATFORM: linux/amd64
+      JWT_PRIVATE_KEY_PATH: /app/keys/private.pem
+      JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
+      GIN_MODE: debug
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}/workspace:/workspace
+      - ${PWD}/problems:/app/problems
+      - ${PWD}/keys:/app/keys:ro
 
 volumes:
   regs-pgdata:
